@@ -1,0 +1,153 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "eagle-eye33"
+date: "February 28, 2016"
+---
+
+**Executive Summary**
+
+In this project, we will using the data from accelerometers on the belt, forearm, arm, and dumbell of 6 research study participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset)
+
+Our goal is to predict the manner in which they did the exercise, ie by predicting the labels for the test set observations.
+
+
+**Training & Test Data**
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+**Initial Data and Pre-Processing**
+
+First load the caret package and read the training and testing data:
+```{r eval=TRUE}
+library(caret)
+library(randomForest)
+library(e1071)
+
+rm(list = ls())
+if (!file.exists("pml-training.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+}
+if (!file.exists("pml-testing.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+}
+
+pml_train <- read.csv("pml-training.csv")
+pml_test <- read.csv("pml-testing.csv")
+```
+
+To be able to estimate the out-of-sample error, first we randomly split the full training set into a smaller training set and a validation set:
+
+```{r eval=TRUE}
+set.seed(10)
+#create data partition with full training set
+inTrain <- createDataPartition(y=pml_train$classe, p=0.7, list=F)
+# smaller training set
+pml_trainSmall <- pml_train[inTrain, ]
+# validation set
+pml_trainValidation <- pml_train[-inTrain, ]
+```
+
+**Clean up of Data**
+
+We shall remove those variables with nearly zero variance, full of NAs and remove the first 5 features that are not in the testing data set. The first 5 features are identified since they are related to the time-series or are not numeric.
+
+```{r eval=TRUE}
+# remove variables with nearly zero variance
+variableNZV <- nearZeroVar(pml_trainSmall)
+pml_trainSmall <- pml_trainSmall[, -variableNZV]
+pml_trainValidation <- pml_trainValidation[, -variableNZV]
+
+# remove variables that are full of NAs
+variableNA <- sapply(pml_trainSmall, function(x) mean(is.na(x))) > 0.95
+pml_trainSmall <- pml_trainSmall[, variableNA==F]
+pml_trainValidation <- pml_trainValidation[, variableNA==F]
+
+# remove first 5 variables that does not help the prediction (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp)
+pml_trainSmall <- pml_trainSmall[, -(1:5)]
+pml_trainValidation <- pml_trainValidation[, -(1:5)]
+```
+
+**Building of Model**
+
+Using Random Forest model, fit the model on smaller training set, proceed with 3-fold cross-validation to select optimal tuning parameters for the model.
+
+```{r eval=TRUE}
+# instruct train to use 3-fold cross-validation to select optimal tuning parameters
+fitControl <- trainControl(method="cv", number=3, verboseIter=F)
+
+# fit model on pml_trainSmall
+fit <- train(classe ~ ., data=pml_trainSmall, method="rf", trControl=fitControl)
+
+# print final model to check the chosen tuning parameters
+fit$finalModel
+```
+
+As a result, number of trees is 500 and number of variables tried at each split is 27.
+
+**Evaluation and Selection of Model**
+
+Now, proceed to use fitted model to predict the label ("classe") in the validation set, also show the confusion matrix to compare the predicted versus the actual labels:
+
+```{r eval=TRUE}
+# use fitted model to predict classe in validation set 
+preds <- predict(fit, newdata=pml_trainValidation)
+
+# show confusion matrix to get estimate of out-of-sample error
+confusionMatrix(pml_trainValidation$classe, preds)
+```
+
+Since the accuracy is 99.8% and the  predicted accuracy for the out-of-sample error is 0.2%, Random Forests will be used to predict on the test set.
+
+**Train the Prediction Model**
+
+Continue to train the model with full training set, repeating the steps done on the smaller training set.
+
+```{r eval=TRUE}
+# remove variables with nearly zero variance
+variableNZV <- nearZeroVar(pml_train)
+pml_train <- pml_train[, -variableNZV]
+pml_test <- pml_test[, -variableNZV]
+
+# remove variables that are full of NAs
+variableNA <- sapply(pml_train, function(x) mean(is.na(x))) > 0.95
+pml_train <- pml_train[, variableNA==F]
+pml_test <- pml_test[, variableNA==F]
+
+# remove first 5 variables that does not help the prediction (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp)
+pml_train <- pml_train[, -(1:5)]
+pml_test <- pml_test[, -(1:5)]
+
+# re-fit model using full training set 
+fitControl <- trainControl(method="cv", number=3, verboseIter=F)
+fit <- train(classe ~ ., data=pml_train, method="rf", trControl=fitControl)
+```
+
+**Predictions on Test Data**
+
+Now, let's use the final complete model to predict the label for the test set observations, write those predictions to individual files:
+
+```{r eval=TRUE}
+# predict on test set
+predictions <- predict(fit, newdata=pml_test)
+
+# convert predictions to character vector
+predictions <- as.character(predictions)
+
+# create function to write predictions to files
+pml_write_files <- function(x) {
+    n <- length(x)
+    for(i in 1:n) {
+        filename <- paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+    }
+}
+
+# create prediction files to submit
+pml_write_files(predictions)
+```
